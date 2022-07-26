@@ -7,13 +7,31 @@ import java.io.IOException
 
 object TicTacToe extends ZIOAppDefault:
 
-  def run = ???
+  def run =
+    for
+      playerPiece        <- choosePlayerPiece
+      pieceThatGoesFirst <- whichPieceGoesFirst
+      whoIsCross          = if playerPiece == Piece.X then Player.Human else Player.Computer
+      initialState       <- ZIO.succeed(State.Ongoing(Board.empty, whoIsCross = whoIsCross, turn = pieceThatGoesFirst))
+      _                  <- programLoop(initialState)
+    yield ()
 
-  def choosePlayerPiece: IO[IOException, Piece] = ???
+  val choosePlayerPiece: IO[IOException, Piece] =
+    for
+      in    <- Console.readLine("deseas X o O?")
+      piece <- ZIO.from(Piece.make(in)).orElse(Console.printLine("entrada invalida") <*> choosePlayerPiece)
+    yield piece
 
-  def whichPieceGoesFirst: UIO[Piece] = ???
+  def whichPieceGoesFirst: UIO[Piece] = Random.nextBoolean.map {
+    case true  => Piece.X
+    case false => Piece.O
+  }
 
-  def programLoop(state: State): IO[IOException, Unit] = ???
+  def programLoop(state: State): IO[IOException, Unit] = state match
+    case s @ State.Ongoing(board, whoIsCross, turn) =>
+      drawBoard(board) <*> step(s).flatMap(programLoop)
+    case State.Over(board)                          =>
+      drawBoard(board)
 
   def drawBoard(board: Board): IO[IOException, Unit] =
     Console.printLine {
@@ -34,11 +52,34 @@ object TicTacToe extends ZIOAppDefault:
       nextState <- takeField(state, nextMove)
     yield nextState
 
-  def getComputerMove(board: Board): IO[IOException, Field] = ???
+  def getComputerMove(board: Board): IO[IOException, Field] =
+    for
+      randomFields <- Random.shuffle(board.unoccupiedFields)
+      randomField  <- ZIO.from(randomFields.headOption).orDieWith(_ => new IllegalStateException("invalid state"))
+      _            <- Console.readLine("esperando por el movimiento de la compu")
+    yield randomField
 
-  def getPlayerMove(board: Board): IO[IOException, Field] = ???
+  def getPlayerMove(board: Board): IO[IOException, Field] =
+    for
+      input    <- Console.readLine("cual es tu movimiento 0-8")
+      tmpField <- ZIO.from(Field.make(input)) <> (Console.printLine("input invalido") <*> getPlayerMove(board))
+      field    <-
+        if board.fieldIsNotFree(tmpField)
+        then Console.printLine("campo ocupado") <*> getPlayerMove(board)
+        else ZIO.succeed(tmpField)
+    yield field
 
-  def takeField(state: State.Ongoing, field: Field): IO[IOException, State] = ???
+  def takeField(state: State.Ongoing, field: Field): IO[IOException, State] =
+    for
+      updatedBoard <- ZIO.succeed(state.board.updated(field, state.turn))
+      updatedTurn  <- ZIO.succeed(state.turn.next)
+      gameResult   <- getGameResult(updatedBoard)
+      nextState    <- gameResult.map { result =>
+                        Console.printLine(result.show).as(State.Over(updatedBoard))
+                      }.getOrElse {
+                        ZIO.succeed(state.copy(board = updatedBoard, turn = updatedTurn))
+                      }
+    yield nextState
 
   def getGameResult(board: Board): UIO[Option[GameResult]] =
     for
